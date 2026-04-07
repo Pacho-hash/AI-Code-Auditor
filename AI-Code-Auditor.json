@@ -1,0 +1,337 @@
+{
+  "name": "AI-Code-Auditor",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": [
+          "message"
+        ],
+        "additionalFields": {}
+      },
+      "id": "f365a847-6f64-435d-9ec4-a63c5f5bd5c9",
+      "name": "Telegram Trigger",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1,
+      "position": [
+        -416,
+        96
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{$json.message?.document?.file_id}}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "ffc27967-9a63-4851-bd2e-89dbb34a9151",
+      "name": "IF Has Document",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -192,
+        96
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "c2",
+              "leftValue": "={{$json.message?.document?.mime_type || ''}}",
+              "rightValue": "application/zip",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "6e941b5b-a256-4d27-a14c-41da442fd86e",
+      "name": "IF Is ZIP",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        32,
+        96
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "fileId": "={{ $json.message.document.file_id }}",
+        "additionalFields": {}
+      },
+      "id": "2a95054a-e096-4284-a5a1-165da9b594e4",
+      "name": "Download Zip (Get File)",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.1,
+      "position": [
+        272,
+        96
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "13351af5-cdc8-4094-acc0-11322f11c8be",
+      "name": "Extract Zip",
+      "type": "n8n-nodes-base.compression",
+      "typeVersion": 1,
+      "position": [
+        496,
+        96
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const trig = $('Telegram Trigger').first().json;\nconst chatId = trig.message.chat.id;\n\nconst allowed = /\\.(html|css|js|mjs|cjs|ts|jsx|tsx|json|md|txt|xml|yml|yaml|php|py|sql)$/i;\nconst skip = /(node_modules\\/|\\.git\\/|dist\\/|build\\/|\\.next\\/|coverage\\/|vendor\\/)/i;\n\nconst MAX_FILE_CHARS = 7000;\nconst MAX_TOTAL_CHARS = 90000;\n\nlet files = [];\nlet decodedFiles = 0;\nlet codeBundle = '';\n\nconst items = $input.all();\n\nfor (let i = 0; i < items.length; i++) {\n  const item = items[i];\n  if (!item.binary) continue;\n\n  for (const binaryKey of Object.keys(item.binary)) {\n    const b = item.binary[binaryKey];\n    if (!b) continue;\n\n    const name = b.fileName || b.filePath || binaryKey || 'unknown';\n    files.push(name);\n\n    if (!allowed.test(name) || skip.test(name)) continue;\n\n    let text = '';\n    try {\n      const buf = await this.helpers.getBinaryDataBuffer(i, binaryKey);\n      text = buf.toString('utf8');\n    } catch (e) {\n      if (typeof b.data === 'string') {\n        const raw = b.data;\n        const looksBase64 = /^[A-Za-z0-9+/=\\r\\n]+$/.test(raw) && raw.replace(/\\s+/g, '').length % 4 === 0;\n        text = looksBase64 ? Buffer.from(raw, 'base64').toString('utf8') : raw;\n      }\n    }\n\n    if (!text || !text.trim()) continue;\n\n    if (/^filesystem-?v2$/i.test(text.trim())) continue;\n\n    text = text.replace(/[^\\x09\\x0A\\x0D\\x20-\\uFFFF]/g, '');\n    const bad = (text.match(/\\x00/g) || []).length; \n    if (bad > 25) continue;\n\n    decodedFiles++;\n    codeBundle += `\\n\\n--- File: ${name} ---\\n${text.slice(0, MAX_FILE_CHARS)}`;\n\n    if (codeBundle.length > MAX_TOTAL_CHARS) {\n      codeBundle = codeBundle.slice(0, MAX_TOTAL_CHARS) + '\\n\\n[truncated]';\n      break;\n    }\n  }\n}\n\nif (!codeBundle.trim()) {\n  codeBundle = `No readable code extracted. Files seen: ${files.length}`;\n}\n\nconst stack = {\n  hasHTML: files.some(f => /\\.html$/i.test(f)),\n  hasReact: files.some(f => /package\\.json$/i.test(f)),\n  hasPhp: files.some(f => /\\.php$/i.test(f)),\n  hasNode: files.some(f => /(^|\\/)(server|app|index)\\.js$/i.test(f)),\n  hasPython: files.some(f => /\\.py$/i.test(f)),\n};\n\nreturn [{\n  json: {\n    chatId,\n    files,\n    decodedFiles,\n    stack,\n    codeBundle\n  }\n}];"
+      },
+      "id": "a0e63e2e-cb3f-4d03-b4f2-979a41dc21cc",
+      "name": "Analyze Files + Stack + OWASP",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        752,
+        96
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const j = $json;\n\nconst prompt = `You are a senior web security and QA engineer.\nAnalyze these extracted website/app files and produce a report,Analyze ONLY the code shown below.\nIf code exists, do not claim files are unreadable.\n\nPre-detected stack:\n${JSON.stringify(j.stack, null, 2)}\n\nRegex security findings:\n${JSON.stringify(j.regexSecurityIssues || [], null, 2)}\n\nProduce:\n1) Overall health score out of 100\n2) CRITICAL issues (must fix before launch)\n3) HIGH severity bugs with file references when possible\n4) Security vulnerabilities with OWASP category\n5) Performance bottlenecks\n6) Accessibility failures\n7) Quick wins (easy fixes)\n\nBe specific and concise. Plain text only.\n\nCode:\n${j.codeBundle}`;\n\nreturn [{ json: { ...j, prompt } }];"
+      },
+      "id": "424bf445-c479-4b0e-a07a-12fc8189f8d3",
+      "name": "Build LLM Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        992,
+        96
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=YOUR_GEMINI_API_KEY_HERE",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { contents: [ { parts: [ { text: $json.prompt } ] } ] } }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "67b2f849-81b9-44dd-9214-9f222f44b770",
+      "name": "Gemini Analysis",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        1248,
+        96
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const ai = $json;\nconst base = $('Analyze Files + Stack + OWASP').first().json;\n\nlet report = 'No AI report generated.';\nif (ai?.candidates?.[0]?.content?.parts?.[0]?.text) {\n  report = ai.candidates[0].content.parts[0].text;\n}\n\nlet score = 0;\nconst m = report.match(/(\\d{1,3})\\s*\\/\\s*100/);\nif (m) score = Math.max(0, Math.min(100, Number(m[1])));\n\nconst emoji = score >= 80 ? '✅' : score >= 50 ? '⚠️' : '🚨';\n\nconst header = `${emoji} Website Test Complete\\n\\nOverall Score: ${score || 'N/A'}/100\\nDecoded Files: ${base.decodedFiles}\\nTotal Files Seen: ${base.files.length}`;\n\nconst clean = report\n  .replace(/[*_~`]/g, '') \n  .replace(/\\u0000/g, '');\n\nconst message = (header + '\\n\\n' + clean).slice(0, 3900);\n\nreturn [{ json: { chatId: base.chatId, message } }];"
+      },
+      "id": "17d56878-c19d-4fdc-8641-307b40e2589a",
+      "name": "Format Telegram Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1488,
+        96
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "={{$json.chatId}}",
+        "text": "={{$json.message}}",
+        "additionalFields": {}
+      },
+      "id": "ea813ad6-e146-4bf0-bd62-63f9bfb29a6f",
+      "name": "Send Report to Telegram",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.1,
+      "position": [
+        1728,
+        96
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "={{$json.message.chat.id}}",
+        "text": "Please send a .zip file as a Telegram document.",
+        "additionalFields": {}
+      },
+      "id": "91b68f36-edd4-4fcd-912a-5e53df04fb26",
+      "name": "Send Not ZIP",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.1,
+      "position": [
+        272,
+        256
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "={{$json.message.chat.id}}",
+        "text": "Please upload your project as a ZIP document.",
+        "additionalFields": {}
+      },
+      "id": "674d0004-9eb1-49d4-b3a9-72445cf3a0d2",
+      "name": "Send No Document",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.1,
+      "position": [
+        32,
+        256
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "IF Has Document",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Has Document": {
+      "main": [
+        [
+          {
+            "node": "IF Is ZIP",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send No Document",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Is ZIP": {
+      "main": [
+        [
+          {
+            "node": "Download Zip (Get File)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Not ZIP",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download Zip (Get File)": {
+      "main": [
+        [
+          {
+            "node": "Extract Zip",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Zip": {
+      "main": [
+        [
+          {
+            "node": "Analyze Files + Stack + OWASP",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyze Files + Stack + OWASP": {
+      "main": [
+        [
+          {
+            "node": "Build LLM Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build LLM Prompt": {
+      "main": [
+        [
+          {
+            "node": "Gemini Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Analysis": {
+      "main": [
+        [
+          {
+            "node": "Format Telegram Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Telegram Report": {
+      "main": [
+        [
+          {
+            "node": "Send Report to Telegram",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "tags": []
+}
